@@ -11,7 +11,6 @@ struct item {
 };
 
 struct prod {
-	int n;
 	int lhs;
 	int nr_rhs;
 	int rhs[100];
@@ -41,18 +40,17 @@ int yylex(void);
  * pair -> ( )
  */
 struct prod prods[] = {
-	{ 0, 0, 1, { 1 } },
-	{ 1, 1, 2, { 1, 2 } },
-	{ 2, 1, 1, { 2 } },
-	{ 3, 2, 3, { 3, 2, 4 } },
-	{ 4, 2, 2, { 3, 4 } },
+	{ 4, 1, { 5 } },
+	{ 5, 2, { 5, 6 } },
+	{ 5, 1, { 6 } },
+	{ 6, 3, { 1, 6, 2 } },
+	{ 6, 2, { 1, 2 } },
 };
-int nr_prods = 5;
-int nr_syms = 5;
-int eof = 5;
-int epsilon = 5 + 1;
 
-struct set *term;
+int nr_prods = 5;
+int nr_nts = 3;
+int eof = 0;
+int epsilon = 3;
 
 struct set *first[5 + 2];
 
@@ -63,8 +61,8 @@ int nr_items;
 struct set *ccs[MAX_CC];
 int nr_ccs;
 
-int act_tab[1000][7];
-int goto_tab[1000][7];
+int act_tab[1000][3];
+int goto_tab[1000][3];
 
 static struct set *
 set_new(int max)
@@ -125,13 +123,10 @@ make_first(void)
 	struct set *rhs;
 	int chg, i, p;
 
-	for (i = 0; i < nr_syms + 2; i++)
-		first[i] = set_new(nr_syms + 2);
-	for (i = 0; i < nr_syms; i++)
-		if (term->s[i])
-			set_add(first[i], i);
-	set_add(first[epsilon], epsilon);
-	set_add(first[eof], eof);
+	for (i = 0; i < epsilon + nr_nts + 1; i++)
+		first[i] = set_new(epsilon + nr_nts + 1);
+	for (i = 0; i <= epsilon; i++)
+		set_add(first[i], i);
 
 	do {
 		chg = 0;
@@ -155,9 +150,9 @@ make_first(void)
 
 #if 0
 	int j;
-	for (i = 0; i < nr_syms; i++) {
+	for (i = 0; i < epsilon + nr_nts + 1; i++) {
 		printf("first[%d] = ", i);
-		for (j = 0; j < nr_syms + 2; j++)
+		for (j = 0; j < epsilon + nr_nts + 1; j++)
 			if (first[i]->s[j])
 				printf("%d ", j);
 		printf("\n");
@@ -188,9 +183,7 @@ make_items(void)
 
 	for (i = 0; i < nr_prods; i++) {
 		for (j = 0; j < prods[i].nr_rhs + 1; j++) {
-			for (k = 0; k < nr_syms + 1; k++) {
-				if (k != eof && !term->s[k])
-					continue;
+			for (k = 0; k < epsilon; k++) {
 				items[nr_items].prod = i;
 				items[nr_items].dot = j;
 				items[nr_items].la = k;
@@ -247,7 +240,7 @@ closure(struct set *s)
 				    first[p->rhs[items[i].dot + 1]]->s[epsilon])
 					chg |= set_add(s, find_item(c, 0,
 					    items[i].la));
-				for (b = 0; b < nr_syms + 1; b++)
+				for (b = 0; b < epsilon + nr_nts + 1; b++)
 					if (first[p->rhs[items[i].dot+1]]->s[b])
 						chg |= set_add(s, find_item(c,
 						    0, b));
@@ -312,6 +305,12 @@ make_cc(void)
 	cc0 = set_new(nr_items);
 	set_add(cc0, find_item(0, 0, eof));
 	cc0 = closure(cc0);
+
+#if 0
+	printf("cc0 = ");
+	print_cc(cc0);
+#endif
+
 	ccs[0] = cc0;
 	nr_ccs = 1;
 	memset(marked, 0, sizeof(int) * MAX_CC);
@@ -375,7 +374,7 @@ make_tables(void)
 				continue;
 			p = &prods[items[i].prod];
 			sym = p->rhs[items[i].dot];
-			if (items[i].dot < p->nr_rhs && term->s[sym]) {
+			if (items[i].dot < p->nr_rhs && sym < epsilon) {
 				// XXX cache gotos?
 				add_act(c, sym, SHIFT | (find_cc(_goto(ccs[c],
 				    p->rhs[items[i].dot])) << ACT_SHIFT));
@@ -388,12 +387,10 @@ make_tables(void)
 				    (items[i].prod << ACT_SHIFT));
 			}
 		}
-		for (i = 0; i < nr_syms; i++) {
-			if (term->s[i])
-				continue;
+		for (i = epsilon + 1; i < epsilon + nr_nts + 1; i++) {
 			g = find_cc(_goto(ccs[c], i));
 			if (g >= 0)
-				goto_tab[c][i] = g;
+				goto_tab[c][i - epsilon - 1] = g;
 		}
 	}
 }
@@ -422,7 +419,7 @@ parse(void)
 			printf(" reduce %d\n", prod->lhs);
 			s = stack[pos - 1];
 			stack[pos++] = prod->lhs;
-			stack[pos++] = goto_tab[s][prod->lhs];
+			stack[pos++] = goto_tab[s][prod->lhs - epsilon - 1];
 		} else if ((act_tab[s][w] & ACT_MASK) == SHIFT) {
 			printf(" shift %d\n", act_tab[s][w] >>
 			    ACT_SHIFT);
@@ -440,7 +437,7 @@ parse(void)
 }
 
 /* (())()$ */
-int _tok[] = { 3, 3, 4, 4, 3, 4, 5 };
+int _tok[] = { 1, 1, 2, 2, 1, 2, 0 };
 int *tok = _tok;
 
 int
@@ -450,12 +447,8 @@ yylex(void)
 }
 
 int
-main(void)
+main(int argc, char **argv)
 {
-	term = set_new(nr_syms);
-	set_add(term, 3);
-	set_add(term, 4);
-
 	make_first();
 	make_items();
 	make_cc();
