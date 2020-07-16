@@ -23,7 +23,7 @@ struct prod {
 
 struct set {
 	int max;
-	int s[];
+	char s[];
 };
 
 enum {
@@ -70,9 +70,9 @@ set_new(int max)
 {
 	struct set *s;
 
-	s = malloc(sizeof(struct set) + max * sizeof(int));
+	s = malloc(sizeof(struct set) + max / 8 + 1);
 	s->max = max;
-	memset(s->s, 0, sizeof(int) * max);
+	memset(s->s, 0, max / 8 + 1);
 	return (s);
 }
 
@@ -82,7 +82,7 @@ set_copy(struct set *_s)
 	struct set *s;
 
 	s = set_new(_s->max);
-	memcpy(s->s, _s->s, sizeof(int) * _s->max);
+	memcpy(s->s, _s->s, _s->max / 8 + 1);
 	return (s);
 }
 
@@ -91,15 +91,15 @@ set_add(struct set *s, int v)
 {
 	int o;
 	
-	o = s->s[v];
-	s->s[v] = 1;
+	o = (s->s[v / 8] >> (v % 8)) & 1;
+	s->s[v / 8] |= 1 << (v % 8);
 	return (!o);
 }
 
 static void
 set_remove(struct set *s, int v)
 {
-	s->s[v] = 0;
+	s->s[v / 8] &= ~(1 << (v % 8));
 }
 
 static int
@@ -108,14 +108,18 @@ set_union(struct set *a, struct set *b)
 	int chg, i;
 
 	chg = 0;
-	for (i = 0; i < b->max; i++) {
-		if (b->s[i]) {
-			if (!a->s[i])
-				chg |= 1;
-			a->s[i] = 1;
-		}
+	for (i = 0; i < b->max / 8 + 1; i++) {
+		if ((a->s[i] | b->s[i]) != a->s[i])
+			chg |= 1;
+		a->s[i] |= b->s[i];
 	}
 	return (chg);
+}
+
+static int
+set_has(struct set *s, int v)
+{
+	return ((s->s[v / 8] >> (v % 8)) & 1);
 }
 
 static void
@@ -137,7 +141,8 @@ make_first(void)
 			rhs = set_copy(first[prods[p].rhs[0]]);
 			set_remove(rhs, epsilon);
 			for (i = 0; i < prods[p].nr_rhs - 1; i++) {
-				if (!first[prods[p].rhs[i + 1]]->s[epsilon])
+				if (!set_has(first[prods[p].rhs[i + 1]],
+				    epsilon))
 					break;
 				set_union(rhs, first[prods[p].rhs[i + 1]]);
 				set_remove(rhs, epsilon);
@@ -154,7 +159,7 @@ make_first(void)
 	for (i = 0; i < epsilon + nr_nts + 1; i++) {
 		printf("first[%d] = ", i);
 		for (j = 0; j < epsilon + nr_nts + 1; j++)
-			if (first[i]->s[j])
+			if (set_has(first[i], j))
 				printf("%d ", j);
 		printf("\n");
 	}
@@ -183,6 +188,7 @@ make_items(void)
 	int i, j, k;
 
 	for (i = 0; i < nr_prods; i++) {
+		prods[i].first_item = nr_items;
 		for (j = 0; j < prods[i].nr_rhs + 1; j++) {
 			for (k = 0; k < epsilon; k++) {
 				items[nr_items].prod = i;
@@ -194,9 +200,9 @@ make_items(void)
 	}
 #if 0
 	for (i = 0; i < nr_items; i++)
-		print_items(&items[i]);
+		print_item(&items[i]);
 #endif
-	printf("%d items\n");
+	printf("%d items\n", nr_items);
 }
 
 static int
@@ -222,7 +228,7 @@ closure(struct set *s)
 	do {
 		chg = 0;
 		for (i = 0; i < nr_items; i++) {
-			if (!s->s[i])
+			if (!set_has(s, i))
 				continue;
 			/* XXX better way to find all prods? */
 			for (c = 0; c < nr_prods; c++) {
@@ -239,11 +245,13 @@ closure(struct set *s)
 				    c);
 #endif
 				if (items[i].dot >= p->nr_rhs - 1 ||
-				    first[p->rhs[items[i].dot + 1]]->s[epsilon])
+				    set_has(first[p->rhs[items[i].dot + 1]],
+				        epsilon))
 					chg |= set_add(s, find_item(c, 0,
 					    items[i].la));
 				for (b = 0; b < epsilon + nr_nts + 1; b++)
-					if (first[p->rhs[items[i].dot+1]]->s[b])
+					if (set_has(
+					    first[p->rhs[items[i].dot+1]], b))
 						chg |= set_add(s, find_item(c,
 						    0, b));
 			}
@@ -252,7 +260,7 @@ closure(struct set *s)
 
 #if 0
 	for (i = 0; i < nr_items; i++)
-		if (s->s[i])
+		if (set_has(s, i))
 			print_item(&items[i]);
 	printf("\n");
 #endif
@@ -266,7 +274,7 @@ print_cc(struct set *s)
 	int i;
 
 	for (i = 0; i < nr_items; i++)
-		if (s->s[i])
+		if (set_has(s, i))
 			print_item(&items[i]);
 	printf("\n");
 }
@@ -279,8 +287,8 @@ _goto(struct set *s, int x)
 
 	moved = set_new(nr_items);
 	for (i = 0; i < nr_items; i++)
-		if (s->s[i] && prods[items[i].prod].rhs[items[i].dot] == x &&
-		    items[i].dot + 1 <= prods[items[i].prod].nr_rhs)
+		if (set_has(s, i) && prods[items[i].prod].rhs[items[i].dot] ==
+		    x && items[i].dot + 1 <= prods[items[i].prod].nr_rhs)
 			set_add(moved, find_item(items[i].prod,
 			    items[i].dot + 1, items[i].la));
 	return (closure(moved));
@@ -292,7 +300,7 @@ find_cc(struct set *s)
 	int i;
 
 	for (i = 0; i < nr_ccs; i++)
-		if (!memcmp(s->s, ccs[i]->s, sizeof(int) * nr_items))
+		if (!memcmp(s->s, ccs[i]->s, nr_items / 8 + 1))
 			return (i);
 	return (-1);
 }
@@ -322,19 +330,19 @@ make_cc(void)
 			continue;
 		marked[c] = 1;
 		for (i = 0; i < nr_items; i++) {
-			if (!ccs[c]->s[i] || items[i].dot >=
+			if (!set_has(ccs[c], i) || items[i].dot >=
 			    prods[items[i].prod].nr_rhs)
 				continue;
 			temp = _goto(ccs[c],
 			    prods[items[i].prod].rhs[items[i].dot]);
 			if (find_cc(temp) == -1) {
-#if 1
+#if 0
 				printf("cc%d = goto(cc%d, %d):\n",
 				    nr_ccs,
 				    c,
 				    prods[items[i].prod].rhs[
 				    items[i].dot]);
-				//print_cc(temp);
+				print_cc(temp);
 #endif
 				ccs[nr_ccs++] = temp;
 				assert(nr_ccs < MAX_CC);
@@ -378,7 +386,7 @@ make_tables(void)
 
 	for (c = 0; c < nr_ccs; c++) {
 		for (i = 0; i < nr_items; i++) {
-			if (!ccs[c]->s[i])
+			if (!set_has(ccs[c], i))
 				continue;
 			p = &prods[items[i].prod];
 			sym = p->rhs[items[i].dot];
