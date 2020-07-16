@@ -3,6 +3,11 @@
 #include <string.h>
 #include <err.h>
 #include <assert.h>
+#include <ctype.h>
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 
 struct item {
 	int prod;
@@ -32,37 +37,33 @@ enum {
 
 int yylex(void);
 
-/*
- * goal -> list
- * list -> list pair
- * list -> pair
- * pair -> ( pair )
- * pair -> ( )
- */
-struct prod prods[] = {
-	{ 4, 1, { 5 } },
-	{ 5, 2, { 5, 6 } },
-	{ 5, 1, { 6 } },
-	{ 6, 3, { 1, 6, 2 } },
-	{ 6, 2, { 1, 2 } },
-};
+struct prod prods[1000];
 
-int nr_prods = 5;
-int nr_nts = 3;
-int eof = 0;
-int epsilon = 3;
+int nr_prods;
+char *terms[1000];
+char *nts[1000];
+int nr_terms;
+int nr_nts;
+int eof;
+int epsilon;
 
-struct set *first[5 + 2];
+struct set *first[1000];
 
-struct item items[1000];
+struct item items[100000];
 int nr_items;
 
 #define	MAX_CC 10000
 struct set *ccs[MAX_CC];
 int nr_ccs;
 
-int act_tab[1000][3];
-int goto_tab[1000][3];
+int *act_tab;
+int *goto_tab;
+
+enum {
+	TOK_SECTION = 0x80,
+	TOK_TOKEN,
+	TOK_SYM,
+};
 
 static struct set *
 set_new(int max)
@@ -195,6 +196,7 @@ make_items(void)
 	for (i = 0; i < nr_items; i++)
 		print_items(&items[i]);
 #endif
+	printf("%d items\n");
 }
 
 static int
@@ -326,28 +328,29 @@ make_cc(void)
 			temp = _goto(ccs[c],
 			    prods[items[i].prod].rhs[items[i].dot]);
 			if (find_cc(temp) == -1) {
-#if 0
+#if 1
 				printf("cc%d = goto(cc%d, %d):\n",
 				    nr_ccs,
 				    c,
 				    prods[items[i].prod].rhs[
 				    items[i].dot]);
-				print_cc(temp);
+				//print_cc(temp);
 #endif
 				ccs[nr_ccs++] = temp;
 				assert(nr_ccs < MAX_CC);
 			}
 		}
 	}
+	printf("%d ccs\n", nr_ccs);
 }
 
 static void
 add_act(int c, int s, int v)
 {
-	if (act_tab[c][s]) {
-		if (act_tab[c][s] != v)
+	if (act_tab[c * epsilon + s]) {
+		if (act_tab[c * epsilon + s] != v)
 			printf("conflict act[%d][%d]: had %d want %d\n", c, s,
-			    act_tab[c][s], v);
+			    act_tab[c * epsilon + s], v);
 	} else {
 #if 0
 		printf("act[%d, %d] = ", c, s);
@@ -358,7 +361,7 @@ add_act(int c, int s, int v)
 		else
 			printf("accept\n");
 #endif
-		act_tab[c][s] = v;
+		act_tab[c * epsilon + s] = v;
 	}
 }
 
@@ -367,6 +370,11 @@ make_tables(void)
 {
 	struct prod *p;
 	int c, g, i, sym;
+
+	act_tab = malloc(sizeof(int) * nr_items * epsilon);
+	memset(act_tab, 0, sizeof(int) * nr_items * epsilon);
+	goto_tab = malloc(sizeof(int) * nr_items * nr_nts);
+	memset(goto_tab, 0, sizeof(int) * nr_items * nr_nts);
 
 	for (c = 0; c < nr_ccs; c++) {
 		for (i = 0; i < nr_items; i++) {
@@ -390,7 +398,7 @@ make_tables(void)
 		for (i = epsilon + 1; i < epsilon + nr_nts + 1; i++) {
 			g = find_cc(_goto(ccs[c], i));
 			if (g >= 0)
-				goto_tab[c][i - epsilon - 1] = g;
+				goto_tab[c * nr_nts + i - epsilon - 1] = g;
 		}
 	}
 }
@@ -410,8 +418,8 @@ parse(void)
 		printf("s %d w %d stack", s, w);
 		for (i = 0; i < pos; i++)
 			printf(" %d", stack[i]);
-		if ((act_tab[s][w] & ACT_MASK) == REDUCE) {
-			prod = &prods[act_tab[s][w] >> ACT_SHIFT];
+		if ((act_tab[s * epsilon + w] & ACT_MASK) == REDUCE) {
+			prod = &prods[act_tab[s * epsilon + w] >> ACT_SHIFT];
 			for (i = 0; i < prod->nr_rhs; i++) {
 				pos--;
 				pos--;
@@ -419,14 +427,15 @@ parse(void)
 			printf(" reduce %d\n", prod->lhs);
 			s = stack[pos - 1];
 			stack[pos++] = prod->lhs;
-			stack[pos++] = goto_tab[s][prod->lhs - epsilon - 1];
-		} else if ((act_tab[s][w] & ACT_MASK) == SHIFT) {
-			printf(" shift %d\n", act_tab[s][w] >>
+			stack[pos++] = goto_tab[s * nr_nts + prod->lhs -
+			    epsilon - 1];
+		} else if ((act_tab[s * epsilon + w] & ACT_MASK) == SHIFT) {
+			printf(" shift %d\n", act_tab[s * epsilon + w] >>
 			    ACT_SHIFT);
 			stack[pos++] = w;
-			stack[pos++] = act_tab[s][w] >> ACT_SHIFT;
+			stack[pos++] = act_tab[s * epsilon + w] >> ACT_SHIFT;
 			w = yylex();
-		} else if ((act_tab[s][w] & ACT_MASK) == ACCEPT) {
+		} else if ((act_tab[s * epsilon + w] & ACT_MASK) == ACCEPT) {
 			printf(" accept\n");
 			return (0);
 		} else {
@@ -437,7 +446,8 @@ parse(void)
 }
 
 /* (())()$ */
-int _tok[] = { 1, 1, 2, 2, 1, 2, 0 };
+//int _tok[] = { 1, 1, 2, 2, 1, 2, 0 };
+int _tok[] = { 7, 3, 5, 7, 1, 7, 6, 0 };
 int *tok = _tok;
 
 int
@@ -446,9 +456,138 @@ yylex(void)
 	return (*tok++);
 }
 
+char _ytext[100];
+char *m;
+int mpos;
+int line = 1;
+
+static int
+next_char(void)
+{
+	int c;
+
+	c = m[mpos++];
+	if (c == '\n')
+		line++;
+	return (c);
+}
+
+static int
+_ylex(void)
+{
+	int c, s;
+
+	c = next_char();
+	while (isspace(c))
+		c = next_char();
+
+	memset(_ytext, 0, 100);
+	if (c == '%') {
+		if ((c = m[mpos]) == '%') {
+			mpos++;
+			return (TOK_SECTION);
+		}
+		for (s = mpos; !isspace(m[mpos]); mpos++);
+		if (!strncmp(m + s, "token", mpos - s))
+			return (TOK_TOKEN);
+	} else if (isalpha(c) || c == '_') {
+		for (s = mpos; isalpha(m[mpos]) || m[mpos] == '_'; mpos++);
+		memcpy(_ytext, m + s - 1, mpos - s + 1);
+		return (TOK_SYM);
+	} else if (c == '\'') {
+		_ytext[0] = '\'';
+		_ytext[1] = m[mpos];
+		_ytext[2] = '\'';
+		mpos += 2;
+		return (TOK_SYM);
+	}
+	return (c);
+}
+
+static int
+find_term(char *n)
+{
+	int i;
+
+	for (i = 0; i < nr_terms; i++)
+		if (!strcmp(terms[i], _ytext))
+			return (i);
+	return (-1);
+}
+
+static int
+find_or_add_nt(char *n)
+{
+	int i, found;
+
+	found = 0;
+	for (i = 0; i < nr_nts; i++) {
+		if (!strcmp(nts[i], n)) {
+			found = 1;
+			break;
+		}
+	}		
+	if (!found)
+		nts[nr_nts++] = strdup(_ytext);
+	return (i);
+}
+
+static void
+parse_y(char *path)
+{
+	struct stat sb;
+	int fd, i, nt, tok;
+
+	if ((fd = open(path, O_RDONLY)) < 0)
+		err(1, "open");
+	if (fstat(fd, &sb) != 0)
+		err(1, "fstat");
+	if ((m = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd,
+	    0)) == MAP_FAILED)
+		err(1, "mmap");
+
+	tok = _ylex();
+	while (tok == TOK_TOKEN) {
+		while ((tok = _ylex()) == TOK_SYM) {
+			if (find_term(_ytext) != -1)
+				errx(1, "duplicate token %s at line %d\n",
+				    _ytext, line);
+			terms[nr_terms++] = strdup(_ytext);
+		}
+	}
+	if (tok != TOK_SECTION)
+		errx(1, "expected %%%% got %d at line %d", tok, line);
+	printf("%d terms\n", nr_terms);
+	epsilon = nr_terms + 1;
+
+	while ((tok = _ylex()) == TOK_SYM) {
+		nt = find_or_add_nt(_ytext);
+		if (_ylex() != ':')
+			errx(1, "expected ':' got %d at line %d", tok, line);
+		prods[nr_prods].lhs = nt + epsilon + 1;
+		while ((tok = _ylex()) == TOK_SYM) {
+			if ((i = find_term(_ytext) + 1) == 0)
+				i = find_or_add_nt(_ytext) + epsilon + 1;
+			if (i > epsilon && _ytext[0] == '\'')
+				errx(1, "didn't declare token %s", _ytext);
+			prods[nr_prods].rhs[prods[nr_prods].nr_rhs] = i;
+			prods[nr_prods].nr_rhs++;
+		}
+		if (tok != ';')
+			errx(1, "expected ';' got %d at line %d", tok, line);
+		nr_prods++;
+	}
+	printf("%d nts\n", nr_nts);
+	printf("%d productions\n", nr_prods);
+}
+
 int
 main(int argc, char **argv)
 {
+	if (argc < 2)
+		errx(1, "Usage: %s <file>", argv[0]);
+	parse_y(argv[1]);
+
 	make_first();
 	make_items();
 	make_cc();
