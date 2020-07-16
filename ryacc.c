@@ -55,6 +55,7 @@ int nr_items;
 
 #define	MAX_CC 10000
 struct set *ccs[MAX_CC];
+int gotos[MAX_CC][1000];
 int nr_ccs;
 
 int *act_tab;
@@ -308,7 +309,7 @@ static void
 make_cc(void)
 {
 	struct set *cc, *cc0, *temp;
-	int c, i, marked[MAX_CC];
+	int c, f, i, w;
 
 	cc = set_new(MAX_CC);
 	cc0 = set_new(nr_items);
@@ -322,30 +323,38 @@ make_cc(void)
 
 	ccs[0] = cc0;
 	nr_ccs = 1;
-	memset(marked, 0, sizeof(int) * MAX_CC);
 
 	for (c = 0; c < nr_ccs; c++) {
-		if (marked[c])
-			continue;
-		marked[c] = 1;
 		for (i = 0; i < nr_items; i++) {
 			if (!set_has(ccs[c], i) || items[i].dot >=
 			    prods[items[i].prod].nr_rhs)
 				continue;
-			temp = _goto(ccs[c],
-			    prods[items[i].prod].rhs[items[i].dot]);
-			if (find_cc(temp) == -1) {
-#if 0
+			w = prods[items[i].prod].rhs[items[i].dot];
+			temp = _goto(ccs[c], w);
+			if ((f = find_cc(temp)) == -1) {
+#if 1
 				printf("cc%d = goto(cc%d, %d):\n",
 				    nr_ccs,
 				    c,
 				    prods[items[i].prod].rhs[
 				    items[i].dot]);
-				print_cc(temp);
+				//print_cc(temp);
+				int j, sum, s2;
+				sum = s2 = 0;
+				for (j = 0; j < nr_items; j++) {
+					if (set_has(temp, j))
+						s2++;
+					if (set_has(temp, j) && items[j].dot !=
+					    0)
+						sum++;
+				}
+				printf("nr: %d/%d\n", sum, s2);
 #endif
+				gotos[c][w] = nr_ccs;
 				ccs[nr_ccs++] = temp;
 				assert(nr_ccs < MAX_CC);
-			}
+			} else
+				gotos[c][w] = f;
 		}
 	}
 	printf("%d ccs\n", nr_ccs);
@@ -390,9 +399,9 @@ make_tables(void)
 			p = &prods[items[i].prod];
 			sym = p->rhs[items[i].dot];
 			if (items[i].dot < p->nr_rhs && sym < epsilon) {
-				// XXX cache gotos?
-				add_act(c, sym, SHIFT | (find_cc(_goto(ccs[c],
-				    p->rhs[items[i].dot])) << ACT_SHIFT));
+				add_act(c, sym, SHIFT |
+				    gotos[c][p->rhs[items[i].dot]] <<
+				    ACT_SHIFT);
 			} else if (items[i].dot >= p->nr_rhs) {
 				if (items[i].prod == 0) {
 					add_act(c, items[i].la, ACCEPT);
