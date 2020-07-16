@@ -17,6 +17,7 @@ struct item {
 
 struct prod {
 	int lhs;
+	int first_item;
 	int nr_rhs;
 	int rhs[100];
 };
@@ -210,10 +211,8 @@ find_item(int p, int dot, int la)
 {
 	int i;
 
-	/* XXX store first_item in p in make_items? */
-	for (i = 0; i < nr_items; i++)
-		if (items[i].prod == p && items[i].dot == dot &&
-		    items[i].la == la)
+	for (i = prods[p].first_item; items[i].prod == p; i++)
+		if (items[i].dot == dot && items[i].la == la)
 			return (i);
 	errx(1, "couldn't find item p %d dot %d la %d\n", p, dot, la);
 	return (-1);
