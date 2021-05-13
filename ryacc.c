@@ -404,13 +404,45 @@ make_cc(void)
 	printf("%d ccs\n", nr_ccs);
 }
 
+void
+print_conflict(int cc, int s, int v)
+{
+	struct sset *ss;
+	int i, j, k, p;
+
+	printf("conflict act[%d][%d]: had %d want %d\n", cc, s,
+	    act_tab[cc * epsilon + s], v);
+	ss = sset_new(nr_prods);
+	for (k = 0; k < ccs[cc]->n; k++) {
+		i = ccs[cc]->l[k];
+		p = items[i].prod;
+		if (!sset_add(ss, p))
+			continue;
+		printf("%s: ", nts[prods[p].lhs - epsilon - 1]);
+		for (j = 0; j < prods[p].nr_rhs; j++) {
+			if (j == items[i].dot)
+				printf(". ");
+			if (prods[p].rhs[j] < epsilon)
+				printf("%s ", terms[prods[p].rhs[j] - 1]);
+			else
+				printf("%s ", nts[prods[p].rhs[j] - epsilon -
+				    1]);
+		}
+		if (j == items[i].dot)
+			printf(". ");
+		printf("\n");
+	}
+	sset_free(ss);
+	printf("token %d %s\n", s, terms[s-1]);
+	fflush(stdout);
+}
+
 static void
 add_act(int c, int s, int v)
 {
 	if (act_tab[c * epsilon + s]) {
 		if (act_tab[c * epsilon + s] != v)
-			printf("conflict act[%d][%d]: had %d want %d\n", c, s,
-			    act_tab[c * epsilon + s], v);
+			print_conflict(c, s, v);
 	} else {
 #if 0
 		printf("act[%d, %d] = ", c, s);
@@ -483,7 +515,8 @@ parse(void)
 				pos--;
 				pos--;
 			}
-			printf(" reduce %d\n", prod->lhs);
+			printf(" reduce %d %s\n", prod->lhs,
+			    nts[prod->lhs - epsilon - 1]);
 			s = stack[pos - 1];
 			stack[pos++] = prod->lhs;
 			stack[pos++] = goto_tab[s * nr_nts + prod->lhs -
