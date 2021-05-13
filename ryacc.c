@@ -256,6 +256,7 @@ static struct sset *
 closure(struct sset *s)
 {
 	struct prod *p;
+	struct sset *fst;
 	int b, c, chg, i, k;
 	
 	do {
@@ -290,11 +291,9 @@ closure(struct sset *s)
 				    epsilon))
 					chg |= sset_add(s, find_item(c, 0,
 					    items[i].la));
-				for (b = 0; b < epsilon + nr_nts + 1; b++)
-					if (sset_has(
-					    first[p->rhs[items[i].dot+1]], b))
-						chg |= sset_add(s, find_item(c,
-						    0, b));
+				fst = first[p->rhs[items[i].dot + 1]];
+				for (b = 0; b < fst->n; b++)
+					sset_add(s, find_item(c, 0, fst->l[b]));
 			}
 		}
 	} while (chg);
