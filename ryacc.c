@@ -624,18 +624,22 @@ parse_y(char *path)
 		nt = find_or_add_nt(_ytext);
 		if (_ylex() != ':')
 			errx(1, "expected ':' got %d at line %d", tok, line);
-		prods[nr_prods].lhs = nt + epsilon + 1;
-		while ((tok = _ylex()) == TOK_SYM) {
-			if ((i = find_term(_ytext) + 1) == 0)
-				i = find_or_add_nt(_ytext) + epsilon + 1;
-			if (i > epsilon && _ytext[0] == '\'')
-				errx(1, "didn't declare token %s", _ytext);
-			prods[nr_prods].rhs[prods[nr_prods].nr_rhs] = i;
-			prods[nr_prods].nr_rhs++;
-		}
+		do {
+			prods[nr_prods].lhs = nt + epsilon + 1;
+			while ((tok = _ylex()) == TOK_SYM) {
+				if ((i = find_term(_ytext) + 1) == 0)
+					i = find_or_add_nt(_ytext) + epsilon +
+					    1;
+				if (i > epsilon && _ytext[0] == '\'')
+					errx(1, "didn't declare token %s",
+					    _ytext);
+				prods[nr_prods].rhs[prods[nr_prods].nr_rhs] = i;
+				prods[nr_prods].nr_rhs++;
+			}
+			nr_prods++;
+		} while (tok == '|');
 		if (tok != ';')
-			errx(1, "expected ';' got %d at line %d", tok, line);
-		nr_prods++;
+			errx(1, "expected ';' got 0x%x at line %d", tok, line);
 	}
 	printf("%d nts\n", nr_nts);
 	printf("%d productions\n", nr_prods);
