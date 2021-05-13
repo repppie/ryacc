@@ -10,10 +10,6 @@
 
 %token CASE DEFAULT IF ELSE SWITCH WHILE DO FOR GOTO CONTINUE BREAK RETURN
 
-%token '&' '*' '+' '-' '~' '!' '/' '%' '^' '|' '?' ':' ';' '{' '}'
-%token '(' ')' '.' ',' '[' ']' '<' '>' '='
-
-
 %%
 
 goal: translation_unit;

@@ -45,6 +45,7 @@ struct prod prods[1000];
 int nr_prods;
 char *terms[1000];
 char *nts[1000];
+struct sset *char_literals;
 int nr_terms;
 int nr_nts;
 int eof;
@@ -52,7 +53,7 @@ int epsilon;
 
 struct sset *first[1000];
 
-struct item items[100000];
+struct item items[300000];
 int nr_items;
 
 #define	MAX_CC 10000
@@ -149,9 +150,12 @@ make_first(void)
 	int chg, i, p;
 
 	for (i = 0; i < epsilon + nr_nts + 1; i++)
-		first[i] = sset_new(epsilon + nr_nts + 1);
+		if ((i < 256 && sset_has(char_literals, i)) || i >= 256)
+			first[i] = sset_new(epsilon + nr_nts + 1);
 	for (i = 0; i <= epsilon; i++)
-		sset_add(first[i], i);
+		if (i == 0 || (i < 256 && sset_has(char_literals, i)) || i >=
+		    256)
+			sset_add(first[i], i);
 
 	do {
 		chg = 0;
@@ -189,17 +193,26 @@ make_first(void)
 static void
 print_item(struct item *item)
 {
-	int i;
+	int i, r;
 
-	printf("%d -> ", prods[item->prod].lhs);
+	printf("%s -> ", nts[prods[item->prod].lhs - epsilon - 1]);
 	for (i = 0; i < prods[item->prod].nr_rhs; i++) {
+		r =  prods[item->prod].rhs[i];
 		if (i == item->dot)
 			printf(". ");
-		printf("%d ", prods[item->prod].rhs[i]);
+		if (r < 256)
+			printf("'%c' ", r);
+		else if (r < epsilon)
+			printf("%s ", terms[r - 256]);
+		else
+			printf("%s ", nts[r - epsilon - 1]);
 	}
 	if (i == item->dot)
 		printf(". ");
-	printf("LA: %d\n", item->la);
+	if (item->la < 256)
+		printf("LA: '%c'\n", item->la);
+	else
+		printf("LA: '%s'\n", terms[item->la - 256]);
 }
 
 static void
@@ -211,6 +224,8 @@ make_items(void)
 		prods[i].first_item = nr_items;
 		for (j = 0; j < prods[i].nr_rhs + 1; j++) {
 			for (k = 0; k < epsilon; k++) {
+				if (k < 256 && !sset_has(char_literals, k))
+					continue;
 				items[nr_items].prod = i;
 				items[nr_items].dot = j;
 				items[nr_items].la = k;
@@ -296,10 +311,14 @@ closure(struct sset *s)
 static void
 print_cc(struct sset *s)
 {
+	struct sset *ss;
 	int i;
 
+	ss = sset_new(nr_prods);
 	for (i = 0; i < s->n; i++)
-		print_item(&items[s->l[i]]);
+		if (sset_add(ss, items[s->l[i]].prod))
+			print_item(&items[s->l[i]]);
+	sset_free(ss);
 	printf("\n");
 }
 
@@ -376,7 +395,7 @@ make_cc(void)
 				continue;
 			temp = _goto(ccs[c], w);
 			if ((f = find_cc(temp)) == -1) {
-#if 1
+#if 0
 				printf("cc%d = goto(cc%d, %d):\n",
 				    nr_ccs,
 				    c,
@@ -407,34 +426,13 @@ make_cc(void)
 void
 print_conflict(int cc, int s, int v)
 {
-	struct sset *ss;
-	int i, j, k, p;
-
-	printf("conflict act[%d][%d]: had %d want %d\n", cc, s,
+	printf("conflict act[%d][%d]: had %d want %d on token ", cc, s,
 	    act_tab[cc * epsilon + s], v);
-	ss = sset_new(nr_prods);
-	for (k = 0; k < ccs[cc]->n; k++) {
-		i = ccs[cc]->l[k];
-		p = items[i].prod;
-		if (!sset_add(ss, p))
-			continue;
-		printf("%s: ", nts[prods[p].lhs - epsilon - 1]);
-		for (j = 0; j < prods[p].nr_rhs; j++) {
-			if (j == items[i].dot)
-				printf(". ");
-			if (prods[p].rhs[j] < epsilon)
-				printf("%s ", terms[prods[p].rhs[j] - 1]);
-			else
-				printf("%s ", nts[prods[p].rhs[j] - epsilon -
-				    1]);
-		}
-		if (j == items[i].dot)
-			printf(". ");
-		printf("\n");
-	}
-	sset_free(ss);
-	printf("token %d %s\n", s, terms[s-1]);
-	fflush(stdout);
+	if (s < 256)
+		printf("'%c'\n", s);
+	else
+		printf("%s\n", terms[s - 257]);
+	print_cc(ccs[cc]);
 }
 
 static void
@@ -538,9 +536,10 @@ parse(void)
 }
 
 /* (())()$ */
-//int _tok[] = { 1, 1, 2, 2, 1, 2, 0 };
+//int _tok[] = { 256, 256, 257, 257, 256, 257, 0 };
+//int _tok[] = { '(', ')', 0 };
 //int _tok[] = { 7, 3, 5, 7, 1, 7, 6, 0 };
-int _tok[] = { 2, 61, 2, 0 };
+int _tok[] = { 256, '+', 256, '*', 257, 0 };
 int *tok = _tok;
 
 int
@@ -602,9 +601,14 @@ find_term(char *n)
 {
 	int i;
 
+	if (*n == '\'') {
+		sset_add(char_literals, *++n);
+		return (*n);
+	}
+
 	for (i = 0; i < nr_terms; i++)
 		if (!strcmp(terms[i], _ytext))
-			return (i);
+			return (i + 256);
 	return (-1);
 }
 
@@ -639,6 +643,9 @@ parse_y(char *path)
 	    0)) == MAP_FAILED)
 		err(1, "mmap");
 
+	char_literals = sset_new(256);
+	sset_add(char_literals, 0);
+
 	tok = _ylex();
 	while (tok == TOK_TOKEN) {
 		while ((tok = _ylex()) == TOK_SYM) {
@@ -651,7 +658,7 @@ parse_y(char *path)
 	if (tok != TOK_SECTION)
 		errx(1, "expected %%%% got %d at line %d", tok, line);
 	printf("%d terms\n", nr_terms);
-	epsilon = nr_terms + 1;
+	epsilon = 256 + nr_terms;
 
 	while ((tok = _ylex()) == TOK_SYM) {
 		nt = find_or_add_nt(_ytext);
@@ -660,7 +667,7 @@ parse_y(char *path)
 		do {
 			prods[nr_prods].lhs = nt + epsilon + 1;
 			while ((tok = _ylex()) == TOK_SYM) {
-				if ((i = find_term(_ytext) + 1) == 0)
+				if ((i = find_term(_ytext)) == -1)
 					i = find_or_add_nt(_ytext) + epsilon +
 					    1;
 				if (i > epsilon && _ytext[0] == '\'')

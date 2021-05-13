@@ -6,14 +6,15 @@
 %token CHAR SHORT INT LONG SIGNED UNSIGNED FLOAT DOUBLE CONST VOLATILE VOID
 %token STRUCT UNION ENUM ELLIPSIS
 %token CASE DEFAULT IF ELSE SWITCH WHILE DO FOR GOTO CONTINUE BREAK RETURN
-%token '&' '*' '+' '-' '~' '!' '/' '%' '^' '|' '?' ':'
-%token '(' ')' '.' ',' '[' ']' '<' '>' '='
 
 %%
 
 goal: expr;
 
-prim_expr: ID | CONSTANT;
+id: ID;
+constant: CONSTANT;
+
+prim_expr: id | constant;
 prim_expr: STRING;
 prim_expr: '(' expr ')';
 
