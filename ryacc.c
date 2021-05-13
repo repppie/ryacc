@@ -106,7 +106,7 @@ sset_copy(struct sset *s)
 static int
 sset_has(struct sset *s, int v)
 {
-	return (s->v[v] >= 0 && s->v[v] < s->max && s->l[s->v[v]] == v);
+	return (s->v[v] >= 0 && s->v[v] < s->n && s->l[s->v[v]] == v);
 }
 
 static int
