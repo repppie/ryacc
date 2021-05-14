@@ -1,4 +1,3 @@
-%token '+' '-' '*' '/' '(' ')'
 %token NUM
 %%
 goal: expr;

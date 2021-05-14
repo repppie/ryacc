@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <err.h>
 #include <assert.h>
@@ -38,8 +39,6 @@ enum {
 #define	ACT_SHIFT 2
 #define	ACT_MASK 3
 
-int yylex(void);
-
 struct prod prods[1000];
 
 int nr_prods;
@@ -63,6 +62,8 @@ int nr_ccs;
 
 int *act_tab;
 int *goto_tab;
+
+int out_fd;
 
 enum {
 	TOK_SECTION = 0x80,
@@ -183,6 +184,8 @@ make_first(void)
 #if 0
 	int j;
 	for (i = 0; i < epsilon + nr_nts + 1; i++) {
+		if (!first[i])
+			continue;
 		printf("first[%d] = ", i);
 		for (j = 0; j < epsilon + nr_nts + 1; j++)
 			if (sset_has(first[i], j))
@@ -463,8 +466,8 @@ make_tables(void)
 	int c, g, i, k, sym;
 
 	act_tab = malloc(sizeof(int) * nr_items * epsilon);
-	memset(act_tab, 0, sizeof(int) * nr_items * epsilon);
-	goto_tab = malloc(sizeof(int) * nr_items * nr_nts);
+	memset(act_tab, 0, sizeof(int) * nr_ccs * epsilon);
+	goto_tab = malloc(sizeof(int) * nr_ccs * nr_nts);
 	memset(goto_tab, 0, sizeof(int) * nr_items * nr_nts);
 
 	for (c = 0; c < nr_ccs; c++) {
@@ -493,60 +496,89 @@ make_tables(void)
 	}
 }
 
-static int
-parse(void)
+static void
+emit(char *fmt, ...)
 {
-	struct prod *prod;
-	int i, pos, stack[1000], s, w;
+	va_list args;
 
-	pos = 0;
-	stack[pos++] = eof;
-	stack[pos++] = 0;
-	w = yylex();
-	while (1) {
-		s = stack[pos - 1];
-		printf("s %d w %d stack", s, w);
-		for (i = 0; i < pos; i++)
-			printf(" %d", stack[i]);
-		if ((act_tab[s * epsilon + w] & ACT_MASK) == REDUCE) {
-			prod = &prods[act_tab[s * epsilon + w] >> ACT_SHIFT];
-			for (i = 0; i < prod->nr_rhs; i++) {
-				pos--;
-				pos--;
-			}
-			printf(" reduce %d %s\n", prod->lhs,
-			    nts[prod->lhs - epsilon - 1]);
-			s = stack[pos - 1];
-			stack[pos++] = prod->lhs;
-			stack[pos++] = goto_tab[s * nr_nts + prod->lhs -
-			    epsilon - 1];
-		} else if ((act_tab[s * epsilon + w] & ACT_MASK) == SHIFT) {
-			printf(" shift %d\n", act_tab[s * epsilon + w] >>
-			    ACT_SHIFT);
-			stack[pos++] = w;
-			stack[pos++] = act_tab[s * epsilon + w] >> ACT_SHIFT;
-			w = yylex();
-		} else if ((act_tab[s * epsilon + w] & ACT_MASK) == ACCEPT) {
-			printf(" accept\n");
-			return (0);
-		} else {
-			printf(" fail\n");
-			return (1);
-		}
-	}
+	va_start(args, fmt);
+	if (vdprintf(out_fd, fmt, args) < 0)
+		err(1, "vdprintf");
+	va_end(args);
 }
 
-/* (())()$ */
-//int _tok[] = { 256, 256, 257, 257, 256, 257, 0 };
-//int _tok[] = { '(', ')', 0 };
-//int _tok[] = { 7, 3, 5, 7, 1, 7, 6, 0 };
-int _tok[] = { 256, '+', 256, '*', 257, 0 };
-int *tok = _tok;
+static void
+emit_parser(void) {
+	int i, j, n;
 
-int
-yylex(void)
-{
-	return (*tok++);
+	if ((out_fd = open("y.tab.c", O_CREAT | O_WRONLY)) < 0)
+		err(1, "open y.tab.c");
+	if (ftruncate(out_fd, 0) != 0)
+		err(1, "ftruncate");
+	
+	emit("static int act_tab[%d][%d] = { ", nr_ccs, epsilon);
+	n = 0;
+	for (i = 0; i < nr_ccs; i++) {
+		for (j = 0; j < epsilon; j++) {
+			if ((++n % 15) == 0)
+				emit("\n");
+			emit("%d,", act_tab[i * epsilon + j]);
+		}
+	}
+	emit("};\n");
+	emit("static int goto_tab[%d][%d] = { ", nr_ccs, nr_nts);
+	for (i = 0; i < nr_ccs; i++) {
+		for (j = 0; j < nr_nts; j++) {
+			if ((++n % 15) == 0)
+				emit("\n");
+			emit("%d,", goto_tab[i * nr_nts + j]);
+		}
+	}
+	emit("};\n");
+	emit("static int prods[%d] = { ", nr_prods * 2);
+	for (i = 0; i < nr_prods; i++) {
+			if ((++n % 15) == 0)
+				emit("\n");
+			emit("%d,", prods[i].nr_rhs);
+			emit("%d,", prods[i].lhs - epsilon - 1);
+	}
+	emit("};\n");
+
+	emit("#include <stdio.h>\n");
+	emit("extern int yylex();\n");
+	emit("static int yyparse(void) {\n");
+	emit("\tint i, pos, prod, stack[1000], s, w;\n");
+	emit("\tpos = 0; stack[pos++] = %d; stack[pos++] = 0;\n", eof);
+	emit("\tw = yylex();\n");
+	emit("\twhile (1) {\n");
+	emit("\t\ts = stack[pos - 1];\n");
+	emit("\t\tprintf(\"s %%d w %%d stack\", s, w);\n");
+	emit("\t\tfor (i = 0; i < pos; i += 2)\n");
+	emit("\t\t\tprintf(\" %%d\", stack[i]);\n");
+	emit("\t\tif ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK, REDUCE);
+	emit("\t\t\tprod = prod = act_tab[s][w] >> %d;\n", ACT_SHIFT);
+	emit("\t\t\tfor (i = 0; i < prods[prod * 2]; i++)\n");
+	emit("\t\t\t\tpos -= 2;\n");
+	emit("\t\t\tprintf(\" reduce %%d\\n\", prods[prod * 2 + 1]);\n");
+	emit("\t\t\ts = stack[pos - 1];\n");
+	emit("\t\t\tstack[pos++] = prods[prod*2+1];\n");
+	emit("\t\t\tstack[pos++] = goto_tab[s][prods[prod*2+1]];\n");
+	emit("\t\t} else if ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK, SHIFT);
+	emit("\t\t\tprintf(\" shift %%d\\n\", act_tab[s][w] >> %d);\n",
+	    ACT_SHIFT);
+	emit("\t\t\tstack[pos++] = w;\n");
+	emit("\t\t\tstack[pos++] = act_tab[s][w] >> %d;\n", ACT_SHIFT);
+	emit("\t\t\tw = yylex();\n");
+	emit("\t\t} else if ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK,
+	    ACCEPT);
+	emit("\t\t\tprintf(\" accept\\n\");\n");
+	emit("\t\t\treturn (0);\n");
+	emit("\t\t} else {\n");
+	emit("\t\t\tprintf(\" fail\\n\");\n");
+	emit("\t\t\treturn (1);\n");
+	emit("\t\t}\n");
+	emit("\t}\n");
+	emit("}\n");
 }
 
 char _ytext[100];
@@ -697,10 +729,8 @@ main(int argc, char **argv)
 	make_items();
 	make_cc();
 	make_tables();
-	if (parse())
-		printf("syntax error\n");
-	else
-		printf("ok\n");
+
+	emit_parser();
 
 	return (0);
 }
