@@ -94,11 +94,13 @@ sset_free(struct sset *s)
 struct sset *
 sset_copy(struct sset *s)
 {
+	int i;
 	struct sset *new;
 
 	new = sset_new(s->max);
 	memcpy(new->l, s->l, s->n * sizeof(int));
-	memcpy(new->v, s->v, s->max * sizeof(int));
+	for (i = 0; i < s->n; i++)
+		new->v[s->l[i]] = s->v[s->l[i]];
 	new->n = s->n;
 	return (new);
 }
