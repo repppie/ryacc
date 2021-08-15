@@ -247,7 +247,10 @@ closure(struct sset *s)
 		chg = 0;
 		for (k = 0; k < s->n; k++) {
 			i = s->l[k];
-			/* XXX better way to find all prods? */
+			/*
+			 * XXX better way to find all prods?
+			 * Maybe have a set of productions for each item set.
+			 */
 			for (c = 0; c < nr_prods; c++) {
 				p = &prods[items[i].prod];
 				if (p->rhs[items[i].dot] != prods[c].lhs)
@@ -345,7 +348,7 @@ static void
 make_cc(void)
 {
 	struct sset *cc0, *temp;
-	int c, f, i, k, w;
+	int c, f, i, j, k, w;
 
 	cc0 = sset_new(nr_items);
 	sset_add(cc0, find_item(0, 0, eof));
@@ -359,12 +362,18 @@ make_cc(void)
 	ccs[0] = cc0;
 	nr_ccs = 1;
 
+	for (i = 0; i < MAX_CC; i++)
+		for (j = 0; j < 1000; j++)
+			gotos[i][j] = -1;
+
 	for (c = 0; c < nr_ccs; c++) {
 		for (k = 0; k < ccs[c]->n; k++) {
 			i = ccs[c]->l[k];
 			if (items[i].dot >= prods[items[i].prod].nr_rhs)
 				continue;
 			w = prods[items[i].prod].rhs[items[i].dot];
+			if (gotos[c][w] >= 0)
+				continue;
 			temp = _goto(ccs[c], w);
 			if ((f = find_cc(temp)) == -1) {
 #if 1
@@ -446,7 +455,7 @@ make_tables(void)
 			}
 		}
 		for (i = epsilon + 1; i < epsilon + nr_nts + 1; i++) {
-			g = find_cc(_goto(ccs[c], i));
+			g = gotos[c][i];
 			if (g >= 0)
 				goto_tab[c * nr_nts + i - epsilon - 1] = g;
 		}
