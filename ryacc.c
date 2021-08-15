@@ -22,9 +22,11 @@ struct prod {
 	int rhs[100];
 };
 
-struct set {
+struct sset {
 	int max;
-	char s[];
+	int n;
+	int *l;
+	int *v;
 };
 
 enum {
@@ -48,13 +50,13 @@ int nr_nts;
 int eof;
 int epsilon;
 
-struct set *first[1000];
+struct sset *first[1000];
 
 struct item items[100000];
 int nr_items;
 
 #define	MAX_CC 10000
-struct set *ccs[MAX_CC];
+struct sset *ccs[MAX_CC];
 int gotos[MAX_CC][1000];
 int nr_ccs;
 
@@ -67,92 +69,108 @@ enum {
 	TOK_SYM,
 };
 
-static struct set *
-set_new(int max)
+static struct sset *
+sset_new(int max)
 {
-	struct set *s;
+	struct sset *s;
 
-	s = malloc(sizeof(struct set) + max / 8 + 1);
+	s = malloc(sizeof(struct sset));
+	s->l = malloc(sizeof(int) * max);
+	s->v = malloc(sizeof(int) * max);
 	s->max = max;
-	memset(s->s, 0, max / 8 + 1);
+	s->n = 0;
 	return (s);
-}
-
-static struct set *
-set_copy(struct set *_s)
-{
-	struct set *s;
-
-	s = set_new(_s->max);
-	memcpy(s->s, _s->s, _s->max / 8 + 1);
-	return (s);
-}
-
-static int
-set_add(struct set *s, int v)
-{
-	int o;
-	
-	o = (s->s[v / 8] >> (v % 8)) & 1;
-	s->s[v / 8] |= 1 << (v % 8);
-	return (!o);
 }
 
 static void
-set_remove(struct set *s, int v)
+sset_free(struct sset *s)
 {
-	s->s[v / 8] &= ~(1 << (v % 8));
+	free(s->l);
+	free(s->v);
+	free(s);
+}
+
+struct sset *
+sset_copy(struct sset *s)
+{
+	struct sset *new;
+
+	new = sset_new(s->max);
+	memcpy(new->l, s->l, s->n * sizeof(int));
+	memcpy(new->v, s->v, s->max * sizeof(int));
+	new->n = s->n;
+	return (new);
 }
 
 static int
-set_union(struct set *a, struct set *b)
+sset_has(struct sset *s, int v)
+{
+	return (s->v[v] >= 0 && s->v[v] < s->max && s->l[s->v[v]] == v);
+}
+
+static int
+sset_add(struct sset *s, int v)
+{
+	if (v >= s->max || sset_has(s, v))
+		return (0);
+	s->v[v] = s->n;
+	s->l[s->n++] = v;
+	return (1);
+}
+
+static void
+sset_remove(struct sset *s, int v)
+{
+	int t;
+	
+	if (!sset_has(s, v))
+		return;
+	t = s->l[s->n - 1];
+	s->l[s->v[v]] = t;
+	s->l[t] = s->v[v];
+	s->n--;
+}
+
+static int
+sset_union(struct sset *a, struct sset *b)
 {
 	int chg, i;
 
 	chg = 0;
-	for (i = 0; i < b->max / 8 + 1; i++) {
-		if ((a->s[i] | b->s[i]) != a->s[i])
-			chg |= 1;
-		a->s[i] |= b->s[i];
-	}
+	for (i = 0; i < b->n; i++)
+		chg |= sset_add(a, b->l[i]);
 	return (chg);
-}
-
-static int
-set_has(struct set *s, int v)
-{
-	return ((s->s[v / 8] >> (v % 8)) & 1);
 }
 
 static void
 make_first(void)
 {
-	struct set *rhs;
+	struct sset *rhs;
 	int chg, i, p;
 
 	for (i = 0; i < epsilon + nr_nts + 1; i++)
-		first[i] = set_new(epsilon + nr_nts + 1);
+		first[i] = sset_new(epsilon + nr_nts + 1);
 	for (i = 0; i <= epsilon; i++)
-		set_add(first[i], i);
+		sset_add(first[i], i);
 
 	do {
 		chg = 0;
 		for (p = 0; p < nr_prods; p++) {
 			if (prods[p].rhs[0] == epsilon)
 				continue;
-			rhs = set_copy(first[prods[p].rhs[0]]);
-			set_remove(rhs, epsilon);
+			rhs = sset_copy(first[prods[p].rhs[0]]);
+			sset_remove(rhs, epsilon);
 			for (i = 0; i < prods[p].nr_rhs - 1; i++) {
-				if (!set_has(first[prods[p].rhs[i + 1]],
+				if (!sset_has(first[prods[p].rhs[i + 1]],
 				    epsilon))
 					break;
-				set_union(rhs, first[prods[p].rhs[i + 1]]);
-				set_remove(rhs, epsilon);
+				sset_union(rhs, first[prods[p].rhs[i + 1]]);
+				sset_remove(rhs, epsilon);
 			}
 			if (i == prods[p].nr_rhs)
-				set_add(rhs, epsilon);
-			chg |= set_union(first[prods[p].lhs], rhs);
-			free(rhs);
+				sset_add(rhs, epsilon);
+			chg |= sset_union(first[prods[p].lhs], rhs);
+			sset_free(rhs);
 		}
 	} while (chg);
 
@@ -161,7 +179,7 @@ make_first(void)
 	for (i = 0; i < epsilon + nr_nts + 1; i++) {
 		printf("first[%d] = ", i);
 		for (j = 0; j < epsilon + nr_nts + 1; j++)
-			if (set_has(first[i], j))
+			if (sset_has(first[i], j))
 				printf("%d ", j);
 		printf("\n");
 	}
@@ -219,17 +237,16 @@ find_item(int p, int dot, int la)
 	return (-1);
 }
 
-static struct set *
-closure(struct set *s)
+static struct sset *
+closure(struct sset *s)
 {
 	struct prod *p;
-	int b, c, chg, i;
+	int b, c, chg, i, k;
 	
 	do {
 		chg = 0;
-		for (i = 0; i < nr_items; i++) {
-			if (!set_has(s, i))
-				continue;
+		for (k = 0; k < s->n; k++) {
+			i = s->l[k];
 			/* XXX better way to find all prods? */
 			for (c = 0; c < nr_prods; c++) {
 				p = &prods[items[i].prod];
@@ -244,24 +261,29 @@ closure(struct set *s)
 				    p->rhs[items[i].dot],
 				    c);
 #endif
+				/*
+				 * Let p -> A dot C B.
+				 * Would C complete the production?
+				 * Yes if either B = epsilon
+				 * or epsilon \in first(C).
+				 */
 				if (items[i].dot >= p->nr_rhs - 1 ||
-				    set_has(first[p->rhs[items[i].dot + 1]],
-				        epsilon))
-					chg |= set_add(s, find_item(c, 0,
+				    sset_has(first[p->rhs[items[i].dot + 1]],
+				    epsilon))
+					chg |= sset_add(s, find_item(c, 0,
 					    items[i].la));
 				for (b = 0; b < epsilon + nr_nts + 1; b++)
-					if (set_has(
+					if (sset_has(
 					    first[p->rhs[items[i].dot+1]], b))
-						chg |= set_add(s, find_item(c,
+						chg |= sset_add(s, find_item(c,
 						    0, b));
 			}
 		}
 	} while (chg);
 
 #if 0
-	for (i = 0; i < nr_items; i++)
-		if (set_has(s, i))
-			print_item(&items[i]);
+	for (i = 0; i < s->n; i++)
+		print_item(&items[s->l[i]]);
 	printf("\n");
 #endif
 
@@ -269,51 +291,64 @@ closure(struct set *s)
 }
 
 static void
-print_cc(struct set *s)
+print_cc(struct sset *s)
 {
 	int i;
 
-	for (i = 0; i < nr_items; i++)
-		if (set_has(s, i))
-			print_item(&items[i]);
+	for (i = 0; i < s->n; i++)
+		print_item(&items[s->l[i]]);
 	printf("\n");
 }
 
-static struct set *
-_goto(struct set *s, int x)
+static struct sset *
+_goto(struct sset *s, int x)
 {
-	struct set *moved;
-	int i;
+	struct sset *moved;
+	int i, k;
 
-	moved = set_new(nr_items);
-	for (i = 0; i < nr_items; i++)
-		if (set_has(s, i) && prods[items[i].prod].rhs[items[i].dot] ==
-		    x && items[i].dot + 1 <= prods[items[i].prod].nr_rhs)
-			set_add(moved, find_item(items[i].prod,
-			    items[i].dot + 1, items[i].la));
+	moved = sset_new(nr_items);
+	for (k = 0; k < s->n; k++) {
+		i = s->l[k];	
+		if (prods[items[i].prod].rhs[items[i].dot] == x &&
+		    items[i].dot + 1 <= prods[items[i].prod].nr_rhs) {
+			int it = find_item(items[i].prod, items[i].dot + 1,
+			    items[i].la);
+			sset_add(moved, it);
+		}
+	}
 	return (closure(moved));
 }
 
 static int
-find_cc(struct set *s)
+find_cc(struct sset *s)
 {
-	int i;
+	int i, j, same;
 
-	for (i = 0; i < nr_ccs; i++)
-		if (!memcmp(s->s, ccs[i]->s, nr_items / 8 + 1))
+	for (i = 0; i < nr_ccs; i++) {
+		if (s->n != ccs[i]->n)
+			continue;
+		same = 1;
+		for (j = 0; j < s->n; j++) {
+			if (!sset_has(ccs[i], s->l[j])) {
+				same = 0;
+				break;
+			}
+		}
+		if (same)
 			return (i);
+			
+	}
 	return (-1);
 }
 
 static void
 make_cc(void)
 {
-	struct set *cc, *cc0, *temp;
-	int c, f, i, w;
+	struct sset *cc0, *temp;
+	int c, f, i, k, w;
 
-	cc = set_new(MAX_CC);
-	cc0 = set_new(nr_items);
-	set_add(cc0, find_item(0, 0, eof));
+	cc0 = sset_new(nr_items);
+	sset_add(cc0, find_item(0, 0, eof));
 	cc0 = closure(cc0);
 
 #if 0
@@ -325,9 +360,9 @@ make_cc(void)
 	nr_ccs = 1;
 
 	for (c = 0; c < nr_ccs; c++) {
-		for (i = 0; i < nr_items; i++) {
-			if (!set_has(ccs[c], i) || items[i].dot >=
-			    prods[items[i].prod].nr_rhs)
+		for (k = 0; k < ccs[c]->n; k++) {
+			i = ccs[c]->l[k];
+			if (items[i].dot >= prods[items[i].prod].nr_rhs)
 				continue;
 			w = prods[items[i].prod].rhs[items[i].dot];
 			temp = _goto(ccs[c], w);
@@ -341,20 +376,20 @@ make_cc(void)
 				//print_cc(temp);
 				int j, sum, s2;
 				sum = s2 = 0;
-				for (j = 0; j < nr_items; j++) {
-					if (set_has(temp, j))
-						s2++;
-					if (set_has(temp, j) && items[j].dot !=
-					    0)
+				for (j = 0; j < temp->n; j++) {
+					if (items[temp->l[j]].dot != 0)
 						sum++;
 				}
-				printf("nr: %d/%d\n", sum, s2);
+				printf("nr: %d/%d\n", sum, temp->n);
+				fflush(stdout);
 #endif
 				gotos[c][w] = nr_ccs;
 				ccs[nr_ccs++] = temp;
 				assert(nr_ccs < MAX_CC);
-			} else
+			} else {
+				sset_free(temp);
 				gotos[c][w] = f;
+			}
 		}
 	}
 	printf("%d ccs\n", nr_ccs);
@@ -385,7 +420,7 @@ static void
 make_tables(void)
 {
 	struct prod *p;
-	int c, g, i, sym;
+	int c, g, i, k, sym;
 
 	act_tab = malloc(sizeof(int) * nr_items * epsilon);
 	memset(act_tab, 0, sizeof(int) * nr_items * epsilon);
@@ -393,9 +428,8 @@ make_tables(void)
 	memset(goto_tab, 0, sizeof(int) * nr_items * nr_nts);
 
 	for (c = 0; c < nr_ccs; c++) {
-		for (i = 0; i < nr_items; i++) {
-			if (!set_has(ccs[c], i))
-				continue;
+		for (k = 0; k < ccs[c]->n; k++) {
+			i = ccs[c]->l[k];
 			p = &prods[items[i].prod];
 			sym = p->rhs[items[i].dot];
 			if (items[i].dot < p->nr_rhs && sym < epsilon) {
@@ -463,7 +497,8 @@ parse(void)
 
 /* (())()$ */
 //int _tok[] = { 1, 1, 2, 2, 1, 2, 0 };
-int _tok[] = { 7, 3, 5, 7, 1, 7, 6, 0 };
+//int _tok[] = { 7, 3, 5, 7, 1, 7, 6, 0 };
+int _tok[] = { 2, 61, 2, 0 };
 int *tok = _tok;
 
 int
