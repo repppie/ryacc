@@ -21,6 +21,7 @@ struct prod {
 	int first_item;
 	int nr_rhs;
 	int rhs[100];
+	char *act;
 };
 
 struct sset {
@@ -64,11 +65,13 @@ int *act_tab;
 int *goto_tab;
 
 int out_fd;
+char *verbatim;
 
 enum {
 	TOK_SECTION = 0x80,
 	TOK_TOKEN,
 	TOK_SYM,
+	TOK_ACT,
 };
 
 static struct sset *
@@ -508,6 +511,39 @@ emit(char *fmt, ...)
 }
 
 static void
+emit_act(int i)
+{
+	char *e, *p;
+	int n;
+
+	emit("\t\t\t\t{\n");
+	emit("\t\t\t\t");
+	for (p = prods[i].act; *p; p++) {
+		if (*p == '\n')
+			emit("\t\t\t\t");
+		else if (*p == '$') {
+			if (p[1] == '$') {
+				emit("yyval");
+				p++;
+				continue;
+			} else {
+				n = strtol(p + 1, &e, 10);
+				if (n > prods[i].nr_rhs)
+					errx(1, "$%d refereces beyond end of "
+					    "rule for %s", n, nts[prods[i].lhs -
+					    epsilon - 1]);
+				if (n == 0)
+					n = 1;
+				emit("stack[pos-%d]", n * 2);
+				p += e - p;
+			}
+		}
+		emit("%c", *p);
+	}
+	emit("\t\t\t\t}\n");
+}
+
+static void
 emit_parser(void) {
 	int i, j, n;
 
@@ -546,6 +582,8 @@ emit_parser(void) {
 
 	emit("#include <stdio.h>\n");
 	emit("extern int yylex();\n");
+	emit("int yylval;\n");
+	emit("int yyval;\n");
 	emit("static int yyparse(void) {\n");
 	emit("\tint i, pos, prod, stack[1000], s, w;\n");
 	emit("\tpos = 0; stack[pos++] = %d; stack[pos++] = 0;\n", eof);
@@ -553,25 +591,36 @@ emit_parser(void) {
 	emit("\twhile (1) {\n");
 	emit("\t\ts = stack[pos - 1];\n");
 	emit("\t\tprintf(\"s %%d w %%d stack\", s, w);\n");
-	emit("\t\tfor (i = 0; i < pos; i += 2)\n");
+	emit("\t\tfor (i = 0; i < pos; i ++)\n");
 	emit("\t\t\tprintf(\" %%d\", stack[i]);\n");
 	emit("\t\tif ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK, REDUCE);
-	emit("\t\t\tprod = prod = act_tab[s][w] >> %d;\n", ACT_SHIFT);
-	emit("\t\t\tfor (i = 0; i < prods[prod * 2]; i++)\n");
-	emit("\t\t\t\tpos -= 2;\n");
 	emit("\t\t\tprintf(\" reduce %%d\\n\", prods[prod * 2 + 1]);\n");
+	emit("\t\t\tprod = act_tab[s][w] >> %d;\n", ACT_SHIFT);
+	emit("\t\t\tyyval = stack[pos - 2 * prods[prod * 2]];\n");
+	emit("\t\t\tswitch (prod) {\n");
+	for (i = 0; i < nr_prods; i++) {
+		if (prods[i].act == NULL)
+			continue;
+		emit("\t\t\tcase %d:\n", i);
+		emit_act(i);
+		emit("\n\t\t\t\tbreak;\n");
+	}
+	emit("\t\t\t}\n");
+	emit("\t\t\tpos -=  prods[prod * 2] * 2;\n");
 	emit("\t\t\ts = stack[pos - 1];\n");
-	emit("\t\t\tstack[pos++] = prods[prod*2+1];\n");
+	emit("\t\t\tstack[pos++] = yyval;\n");
 	emit("\t\t\tstack[pos++] = goto_tab[s][prods[prod*2+1]];\n");
 	emit("\t\t} else if ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK, SHIFT);
 	emit("\t\t\tprintf(\" shift %%d\\n\", act_tab[s][w] >> %d);\n",
 	    ACT_SHIFT);
-	emit("\t\t\tstack[pos++] = w;\n");
+	emit("\t\t\tstack[pos++] = yylval;\n");
 	emit("\t\t\tstack[pos++] = act_tab[s][w] >> %d;\n", ACT_SHIFT);
 	emit("\t\t\tw = yylex();\n");
 	emit("\t\t} else if ((act_tab[s][w] & %d) == %d) {\n", ACT_MASK,
 	    ACCEPT);
 	emit("\t\t\tprintf(\" accept\\n\");\n");
+	if (prods[0].act != NULL)
+		emit_act(0);
 	emit("\t\t\treturn (0);\n");
 	emit("\t\t} else {\n");
 	emit("\t\t\tprintf(\" fail\\n\");\n");
@@ -579,9 +628,14 @@ emit_parser(void) {
 	emit("\t\t}\n");
 	emit("\t}\n");
 	emit("}\n");
+
+	if (verbatim)
+		for (; *verbatim != '\0'; verbatim++)
+			emit("%c", *verbatim);
 }
 
 char _ytext[100];
+char *_yptr;
 char *m;
 int mpos;
 int line = 1;
@@ -600,7 +654,7 @@ next_char(void)
 static int
 _ylex(void)
 {
-	int c, s;
+	int c, nest, s;
 
 	c = next_char();
 	while (isspace(c))
@@ -625,6 +679,19 @@ _ylex(void)
 		_ytext[2] = '\'';
 		mpos += 2;
 		return (TOK_SYM);
+	} else if (c == '{') {
+		nest = 0;
+		s = mpos++;
+		while (1) {
+			if (m[mpos] == '{')
+				nest++;
+			else if (m[mpos] == '}' && nest-- == 0)
+				break;
+			mpos++;
+		}
+		m[mpos++] = '\0';
+		_yptr = m + s;
+		return (TOK_ACT);
 	}
 	return (c);
 }
@@ -709,11 +776,18 @@ parse_y(char *path)
 				prods[nr_prods].rhs[prods[nr_prods].nr_rhs] = i;
 				prods[nr_prods].nr_rhs++;
 			}
+			if (tok == TOK_ACT) {
+				prods[nr_prods].act = _yptr;
+				tok = _ylex();
+			}
 			nr_prods++;
 		} while (tok == '|');
 		if (tok != ';')
 			errx(1, "expected ';' got 0x%x at line %d", tok, line);
 	}
+	if (tok == TOK_SECTION)
+		verbatim = &m[mpos];
+
 	printf("%d nts\n", nr_nts);
 	printf("%d productions\n", nr_prods);
 }
